@@ -1,0 +1,4 @@
+Simple _work in progress_ application demonstrating PayPal integration from
+Google App Engine.
+
+It currently has a number of things hardcoded and virtually no error handling to speak of. The markup as well is non-existent. Don't even think about using as is for anything real.

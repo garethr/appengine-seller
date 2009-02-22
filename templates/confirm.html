@@ -1,0 +1,18 @@
+{{paypal_details}}
+
+<div>
+    name: {{first_name}} {{last_name}}
+</div>
+<div>
+    email: {{email}}
+</div>
+<div>
+    amount: {{amount}}
+</div>
+
+<form action="" method="post">
+    <input type="hidden" name="token" value="{{token}}"/>
+    <input type="hidden" name="amount" value="{{amount}}"/>
+    <input type="hidden" name="payer_id" value="{{payer_id}}"/>
+    <input type="submit" value="Submit"/>
+</form>
