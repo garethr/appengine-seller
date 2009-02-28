@@ -2,13 +2,24 @@
 
 """
 PayPal utility class based on http://www.djangosnippets.org/snippets/1181/
-and modified to use the urlfetch API which is part of App Engine
+modified to use the urlfetch API which is part of App Engine and to move
+configuration into a settings module
 """
 
-import urllib, md5, datetime
+import urllib, md5, datetime, sys
 from cgi import parse_qs
+import logging
 
 from google.appengine.api import urlfetch
+
+# You need a settings.py file in the root of your site which defines
+# the following constant: PAYPAL_USER, PAYPAL_PASSWORD, PAYPAL_SIG, 
+# PAYPAL_RETURNURL, PAYPAL_CANCELURL
+try:
+    import settings
+except ImportError, error:
+    logging.error("You have to create a local settings file (Error: %s)" % error)
+    sys.exit()
 
 class PayPal:
     signature_values = {}
@@ -16,11 +27,10 @@ class PayPal:
     PAYPAL_URL = "https://www.sandbox.paypal.com/webscr&cmd=_express-checkout&token="
     
     def __init__(self):
-        ## Sandbox values
         self.signature_values = {
-            'USER' : 'gareth_1235331656_biz_api1.gmail.com', #'sdk-three_api1.sdk.com',
-            'PWD' : '1235331680', #'QFZCWN5HZM8VBG7Q',
-            'SIGNATURE' : 'AFcWxV21C7fd0v3bYYYRCpSSRl31ApqbGFJeDaKFcDnvrb89dJa.1YCv', #'A-IzJhZZjhg29XQ2qnhapuwxIDzyAZQ92FRP5dqBzVesOkzbdUONzmOU',
+            'USER' : settings.PAYPAL_USER, 
+            'PWD' : settings.PAYPAL_PASSWORD, 
+            'SIGNATURE' : settings.PAYPAL_SIG,
             'VERSION' : '53.0',
         }
         self.signature = urllib.urlencode(self.signature_values) + "&"
@@ -30,8 +40,8 @@ class PayPal:
             'METHOD' : "SetExpressCheckout",
             'NOSHIPPING' : 1,
             'PAYMENTACTION' : 'Authorization',
-            'RETURNURL' : 'http://localhost:8080/returnurl',
-            'CANCELURL' : 'http://localhost:8080/cancelurl',
+            'RETURNURL' : settings.PAYPAL_RETURNURL,
+            'CANCELURL' : settings.PAYPAL_CANCELURL,
             'AMT' : amount,
         }
         params.update(kwargs)
@@ -45,8 +55,8 @@ class PayPal:
     def GetExpressCheckoutDetails(self, token, return_all = False):
         params = {
             'METHOD' : "GetExpressCheckoutDetails",
-            'RETURNURL' : 'http://localhost:8080/returnurl', #edit this 
-            'CANCELURL' : 'http://localhost:8080/cancelurl', #edit this 
+            'RETURNURL' : settings.PAYPAL_RETURNURL,
+            'CANCELURL' : settings.PAYPAL_CANCELURL,
             'TOKEN' : token,
         }
         params_string = self.signature + urllib.urlencode(params)        
@@ -65,8 +75,8 @@ class PayPal:
         params = {
             'METHOD' : "DoExpressCheckoutPayment",
             'PAYMENTACTION' : 'Sale',
-            'RETURNURL' : 'http://localhost:8080/returnurl', #edit this 
-            'CANCELURL' : 'http://localhost:8080/cancelurl', #edit this 
+            'RETURNURL' : settings.PAYPAL_RETURNURL,
+            'CANCELURL' : settings.PAYPAL_CANCELURL,
             'TOKEN' : token,
             'AMT' : amt,
             'PAYERID' : payer_id,
