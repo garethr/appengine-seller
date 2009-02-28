@@ -41,13 +41,17 @@ class Index(webapp.RequestHandler):
             context.update({
                 'paypal_url': paypal_url
             })
+            template_file = "index.html"
         except urlfetch.DownloadError:
-            # log error
-            pass
+            context.update({
+                'reason': "We couldn't contact PayPal"
+            })
+            template_file = "error.html"
+            logging.error("PayPal connection error")
             
         # calculate the template path
         path = os.path.join(os.path.dirname(__file__), 'templates',
-            'index.html')
+            template_file)
         # render the template with the provided context
         output = template.render(path, context)
         self.response.out.write(output)
@@ -68,8 +72,12 @@ class Success(webapp.RequestHandler):
             # was on paypal
             paypal_details = pp.GetExpressCheckoutDetails(token, return_all = True)
             connected = True
+            context = {
+                'details': paypal_details,
+            }
         except urlfetch.DownloadError:
             connected = False
+            context = {}
         
         if connected and 'Success' in paypal_details['ACK']: 
             # this means not only did we get to talk to PayPal
@@ -81,6 +89,12 @@ class Success(webapp.RequestHandler):
             amount = paypal_details['AMT'][0]
             email = paypal_details['EMAIL'][0]
             payer_id = paypal_details['PAYERID'][0]
+            currency = paypal_details['CURRENCYCODE'][0]
+            correlation_id = paypal_details['CORRELATIONID'][0]
+            
+            logging.info("Purchase request from %s %s <%s>" % (
+                first_name, last_name, email
+            ))
     
             # for added security we're creating a hash at this stage
             # and then comparing it again when we do the transation
@@ -88,40 +102,46 @@ class Success(webapp.RequestHandler):
             # store it for up to a day
             memcache.add(token, security, 360)
     
-            context = {
-                'paypal_details': paypal_details,
+            context.update({
                 'token': token,
                 'first_name': first_name,
                 'last_name': last_name,
                 'amount': amount,
                 'email': email,    
                 'payer_id': payer_id,
-            }
+            })
+            template_file = "confirm.html"
             
         elif connected and 'Failure' in paypal_details['ACK']: 
             # this means we talked to paypal but something went wrong
             # it could be things like someone hacking the urls
             # resulting in invalid tokens
             # we should log this as an error
-            severity = paypal_details['L_SEVERITYCODE0'][0]
-            short_message = paypal_details['L_SHORTMESSAGE0'][0]
+            severity = paypal_details['L_SEVERITYCODE0']
+            short_message = paypal_details['L_SHORTMESSAGE0']
             long_message = paypal_details['L_LONGMESSAGE0'][0]
-            error_code = paypal_details['L_ERRORCODE0'][0]
-            correlation_id = paypal_details['CORRELATIONID'][0]
-        else:
-            context = {
-                'paypal_details': paypal_details,
-            }
+            error_code = paypal_details['L_ERRORCODE0']
+            correlation_id = paypal_details['CORRELATIONID']
+            
+            logging.error("[%s:%s:%s] %s" % (
+                severity, error_code, short_message, correlation_id
+            ))
+            context.update({
+                'reason': long_message,
+            })
+            template_file = "error.html"
             
         if not connected:
             # we couln't get through to paypal
-            context = {
-                'paypal_details': paypal_details,
-            }
+            template_file = "error.html"
+            context.update({
+                'reason': "We couldn't contact PayPal"
+            })
+            logging.error("PayPal connection error")
             
         # calculate the template path
         path = os.path.join(os.path.dirname(__file__), 'templates',
-            'confirm.html')
+            template_file)
         # render the template with the provided context
         output = template.render(path, context)
         self.response.out.write(output)
@@ -135,47 +155,85 @@ class Success(webapp.RequestHandler):
         amount = self.request.POST.get('amount', '')
         payer_id = self.request.POST.get('payer_id', '')
         
+        
         if token and amount and payer_id:
             # everything we need is present in the form data so we can proceed
             try:
                 pp = paypal.PayPal()
                 payment_details = pp.DoExpressCheckoutPayment(token=token, payer_id=payer_id, amt=amount)
+                context = {
+                    'details': payment_details,
+                }
                 connected = True
             except urlfetch.DownloadError:
                 # we coudn't get through to paypal
+                context = {}
                 connected = False
 
             if connected and 'Success' in payment_details['ACK']:
+                
+                # get the transaction details
+                transation_id = payment_details['TRANSACTIONID'][0]
+                amount = payment_details['AMT'][0]
+                fee = payment_details['FEEAMT'][0]
+                correlation_id = payment_details['CORRELATIONID'][0]
+                
                 # get our cached hash value
                 data = memcache.get(token)
+                # assume the worst
+                tampering = True
                 if data is not None:
                     # do our hash calculations again
                     security = hash(amount + settings.SALT + payer_id)
                     if data == security:
-                        # We have been paid. Do things like, enable subsciprion, ship goods etc.
-                        template_file = 'success.html'
+                        tampering = False
+                    else:
+                        logging.error("On checkout hash didn't match for transaction: %s" % transation_id)
                 else:
                     # the hash didn't exist, which probably means
                     # something has been tampered with
-                    # log it
-                    template_file = 'failure.html'
+                    logging.error("On checkout hash didn't exist for transaction: %s" % transation_id)
+
+                if "Completed" in payment_details['PAYMENTSTATUS']:
+                    # We have been paid!
+                    template_file = 'success.html'
+                    
+                else:
+                    # the payment wasn't confirmed but we might have
+                    # a reason we can announce
+                    reason = payment_details['PENDINGREASON']
+                    context.update({
+                        'reason': reason,
+                    })
+                    logging.error('Payment failed for transaction: %s because "%s"' % (transation_id, reason))
+                    template_file = 'error.html'
+                
                         
             elif connected and 'Failure' in payment_details['ACK']:
                 # this means we talked to paypal but something went wrong
                 # it could be things like someone hacking the urls
                 # resulting in invalid tokens
-                severity = paypal_details['L_SEVERITYCODE0'][0]
-                short_message = paypal_details['L_SHORTMESSAGE0'][0]
-                long_message = paypal_details['L_LONGMESSAGE0'][0]
-                error_code = paypal_details['L_ERRORCODE0'][0]
-                correlation_id = paypal_details['CORRELATIONID'][0]
-                # we should log this as an error            
-                template_file = 'failure.html'
+                severity = payment_details['L_SEVERITYCODE0']
+                short_message = payment_details['L_SHORTMESSAGE0']
+                long_message = payment_details['L_LONGMESSAGE0']
+                error_code = payment_details['L_ERRORCODE0']
+                correlation_id = payment_details['CORRELATIONID']
+                # we should log this as an error    
+                logging.error("[%s:%s:%s] %s" % (
+                    severity, error_code, short_message, correlation_id
+                ))
+                context.update({
+                    'reason': long_message
+                })  
+                template_file = 'error.html'
             
             if not connected:
                 # we couln't get through to paypal
-                # log it
-                template_file = 'failure.html'
+                logging.error("PayPal connection error")
+                context.update({
+                    'reason': "We couldn't contact PayPal"
+                })                
+                template_file = 'error.html'
                 
         else:
             # something was missing from the form data
@@ -185,10 +243,6 @@ class Success(webapp.RequestHandler):
             self.redirect('/returnurl?%s' % token)
             return
 
-        context = {
-            'payment_details': payment_details,
-        }
-            
         # calculate the template path
         path = os.path.join(os.path.dirname(__file__), 'templates',
             template_file)
@@ -202,6 +256,7 @@ class Cancel(webapp.RequestHandler):
         This view deals with the situation if people
         visit paypal but click the cancel button
         """
+        context = {}
         # calculate the template path
         path = os.path.join(os.path.dirname(__file__), 'templates',
             'index.html')
