@@ -99,8 +99,8 @@ class Success(webapp.RequestHandler):
             # for added security we're creating a hash at this stage
             # and then comparing it again when we do the transation
             security = hash(amount + settings.SALT + payer_id)
-            # store it for up to a day
-            memcache.add(token, security, 360)
+            # store it for up to an hour
+            memcache.add(token, security, 3600)
     
             context.update({
                 'token': token,
